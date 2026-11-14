@@ -57,6 +57,36 @@ repository or project names.
 `hub.json`: `repos`, `days` (the dashboard's window), `lang` (`en`, `zh-TW`), `feedback` (where suggestions go
 when a skill names no `feedback:` of its own: `owner/repo` or a git URL; empty means this hub), `rebuild_hours`
 (how stale the dashboard may get before the next person to share rebuilds it; default 1).
+`public` (true: anyone can read this hub, so nothing is sent to it without the person seeing it first), `usage`
+(`"git"`, or `"none"` for a hub that collects no usage), `checks` (a list of checks, as in a case, asked of every
+case of every skill: what the company expects of any answer).
+
+A skill's use in `usage/` may carry `"clients": {"claude-code": 3, "cowork": 2}` and `token_sessions` (the
+sessions whose tokens are known; Cowork reports none, so they stay out of the tokens-per-session average).
+
+### `releases.jsonl` (one line per release, appended by `release.py publish`)
+
+```json
+{"schema": 1, "skill": "meeting-notes", "version": "79cd3b853446", "previous": "782a8ed41df7", "date": "2026-11-14",
+ "by": "ana", "note": "Adds a Risks section and stops asking questions before writing",
+ "evidence": {"cases": 3, "times": 1, "which": "small", "word": "no difference", "passed": [3, 3],
+              "passed_before": [3, 3], "tokens_change_pct": 0, "few_runs": true},
+ "forced": "only when it was released although it did worse, or without cases: the reason"}
+```
+
+`release.py publish SKILL --proposed DIR --note TEXT` runs the cases with the current and the proposed version
+(`--evidence EVAL_ID` reuses an evaluation of exactly these two versions), refuses when `word` is `worse` unless
+`--force REASON`, copies the folder over the skill in the hub, appends the line and pushes with the owner's own
+git access. `update.py` (run by the SessionStart hook, at most every ten minutes per project) fetches the hub,
+applies the pack again and says what changed, with the note and `passed`; a file changed in the project is left
+alone. The inventory carries each skill's last release (`release`) and the latest thirty (`releases`).
+
+### Feedback: a sentence becomes an issue
+
+`/skill-feedback down it asks too many questions` (or the app's box) records the event and, when there are words,
+opens an issue `[<skill>] <the sentence>` with labels `skill:<skill>`, `feedback`, `helped` or `did-not-help` in
+the skill's feedback repository, with the version and the pack. Never on a public hub. A thumb without words stays
+a count.
 
 ### Suggestions: GitHub issues in the owner's repository
 
@@ -94,6 +124,24 @@ key given must hold). Always, without a check: a presentation a run writes must 
 resolve, XML parses), with no empty slide and no shape outside the slide. `tools` lists the built-in tools the
 original session used (`["Write", "Bash"]`); an evaluation allows exactly those.
 
+Small cases: `"small": true, "parent": "<skill>/<id>", "why": "..."`, in `.claude/cases/<skill>/<parent id>-<name>/`.
+The case-splitter skill shows them in the conversation and `/save-small-cases` writes them (the app's Split button
+runs the same skill without a terminal: `case.split`):
+
+````
+~~~~opencolony-case revenue-slide
+{"parent": ".claude/cases/pptx/20261114-114019", "request": "...", "why": "...", "checks": [...]}
+~~~~
+~~~~opencolony-file revenue-slide/files/q.csv
+(the file's whole text)
+~~~~
+~~~~opencolony-copy revenue-slide/files/template.pptx
+~~~~
+````
+
+A small case must name its original and may not be over 60% of its files' size. `evaluate.py run` and a release
+run the small cases when a skill has any (`--which full` the originals, `all` both).
+
 An evaluation, as shared (counts only; the requests and answers stay on the person's machine):
 
 ```json
@@ -127,6 +175,9 @@ runs passing every check first, then tokens (a change under 10% is no difference
   They are marked by the path `.claude/opencolony/record.py`; other settings and hooks are kept, and
   `.claude/.gitignore` keeps the file out of git.
 - `.claude/cases/`: the cases saved in this project.
+- `proposed/<skill>/`: a copy of a skill being changed (the app's "Start a proposed version"); what
+  `release.py publish --proposed` takes. Outside `.claude/`, so it is not a skill Claude Code loads.
+- The lock also holds `lang`, `feedback`, `public`, `usage`, `needs`, `wants` from the hub.
 
 `pull.py doctor PROJECT` checks everything counting needs (Python, git, the hub, Claude Code, the hooks, whether
 Claude Code trusts the folder, when the hooks last ran, when usage was last shared) and says each problem in
@@ -141,6 +192,9 @@ plain words: `{"ok": bool, "checks": [{"name", "ok", "say"}]}`.
     `feedback.py recent --project DIR` (`{"items": [{name, type, last_used, rated, version}]}`)
   - `correction`: `session, skill`
   - `session`: `session, tokens: {input, output, cache_write, cache_read, total, models, skills, turns}`
+  - `update`: `project, changed: [items], hub_commit` (a session start brought new versions)
+  - a `use` or `feedback` from Cowork has `client: "cowork"` and the time Cowork wrote in the file's name
+- `cowork.json`: `{pack, hub, items: [{name, version, tree}], installed_at, collected_at, collected: {uses, feedback}}`.
 - `config.json` (optional): `{"user": "name to share under", "hub": "git URL", "feedback": "owner/repo",
   "onedrive": "folder", "onedrive_url": "https://acme-my.sharepoint.com/personal/ana_acme_com/Documents", "nudge": true}`.
 - `notices.jsonl`: results of background work (a suggestion sent or not) not shown yet.
@@ -148,3 +202,23 @@ plain words: `{"ok": bool, "checks": [{"name", "ok", "say"}]}`.
 - `evals/<id>/result.json`, `compare.html` and `outputs/<case>/<arm>-<n>/` (the answer, every file the run wrote
   up to 30 MB, and `slides/*.png` when LibreOffice and pdftoppm exist): each evaluation in full, to look at; `evals/unseen.jsonl`: results not yet shown
   (the next session start shows them). `cases/`: cases saved outside a project. `heartbeat`: when a hook last ran.
+
+## In the person's OneDrive (Microsoft 365 Copilot Cowork)
+
+- `Documents/Cowork/skills/<name>/SKILL.md` (+ the skill's files): written by `cowork.py install PACK`, refreshed by
+  `cowork.py sync`. `name:` equals the folder; the text ends with `<!-- opencolony:report-back -->` and a section
+  asking Cowork to save, once per task, `oc-<name>-<YYYYMMDD-HHMMSS>.txt` in its output folder:
+
+  ```
+  skill: meeting-notes
+  version: 79cd3b853446
+  result: done
+  rating: down
+  feedback: it asked me too many questions
+  ```
+
+  `cowork.py sync` reads those files (in `<OneDrive>/Cowork/`, `<OneDrive>/Documents/Cowork/` or `"cowork_output"`
+  in config.json), records a `use` (and a `feedback` when there is a rating or words; `failed` counts as 👎), sends
+  the words to the owner like any other sentence, and moves the file to `opencolony/processed/`. Skills that do not
+  fit Cowork's limits (20 files, 10 MB, 5 MB each, 50 skills, kebab-case name) are reported and not installed;
+  a skill the person changed in OneDrive, or one this program did not put there, is never touched.

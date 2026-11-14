@@ -100,7 +100,7 @@ SKIP = {".git", "node_modules", "usage", "data", "site", ".scan", "cases", "eval
 
 
 KINDS = {"skill": "", "command": "/", "agent": "@"}
-OWN_COMMANDS = {"skill-feedback", "save-as-case", "skill-eval", "send-suggestion"}      # the app's own, in every project
+OWN_COMMANDS = {"skill-feedback", "save-as-case", "save-small-cases", "skill-eval", "send-suggestion"}      # the app's own, in every project
 
 
 def items_in(root: Path):
@@ -153,8 +153,23 @@ def inventory(scan: list[Path]) -> dict:
             wo = words(o["description"])
             if ws and wo and len(ws & wo) / len(ws | wo) >= 0.5:
                 s["similar"].append(o["name"])
+    last, every = {}, []
+    try:
+        for line in (ROOT / "releases.jsonl").read_text(encoding="utf-8").splitlines():
+            try:
+                r = json.loads(line)
+                last[r["skill"]] = r
+                every.append({k: r.get(k) for k in ("skill", "date", "by", "note", "evidence", "version", "forced")})
+            except (ValueError, KeyError, TypeError):
+                pass
+    except OSError:
+        pass
+    for s in skills:
+        if s["type"] == "skill" and s["name"] in last:
+            r = last[s["name"]]
+            s["release"] = {k: r.get(k) for k in ("date", "by", "note", "evidence", "version", "forced")}
     return {"schema": 1, "made": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"), "skills": skills,
-            "packs": pull.packs(ROOT) if (ROOT / "packs").is_dir() else []}
+            "packs": pull.packs(ROOT) if (ROOT / "packs").is_dir() else [], "releases": every[::-1][:30]}
 
 
 # ------------------------------------------------------------------ aggregate
@@ -196,6 +211,9 @@ def aggregate(days: int, today: dt.date | None = None) -> dict:
             p["uses"] += int(s.get("uses") or 0)
             p["sessions"] += int(s.get("sessions") or 0)
             p["tokens_in_sessions"] += int(s.get("tokens_in_sessions") or 0)
+            p["token_sessions"] = p.get("token_sessions", 0) + int(s.get("token_sessions", s.get("sessions") or 0) or 0)
+            for c, n in (s.get("clients") or {}).items():
+                p.setdefault("clients", {})[c] = p.get("clients", {}).get(c, 0) + int(n)
             p["up"] += int(s.get("feedback_up") or 0)
             p["down"] += int(s.get("feedback_down") or 0)
             p["corrections_after"] += int(s.get("corrections_after") or 0)
@@ -220,7 +238,8 @@ def aggregate(days: int, today: dt.date | None = None) -> dict:
     for p in per.values():
         p["people"], p["sources"], p["days"], p["names"] = len(p["people"]), sorted(p["sources"]), len(p["days"]), sorted(p["names"])
         p["notes"] = sorted(p["notes"], key=lambda n: n["date"], reverse=True)[:20]
-        p["tokens_per_session"] = round(p["tokens_in_sessions"] / p["sessions"]) if p["sessions"] else None
+        p["tokens_per_session"] = round(p["tokens_in_sessions"] / p["token_sessions"]) if p.get("token_sessions") else None
+        p.setdefault("clients", {})
         out.append(p)
     nts = totals["no_skill_sessions"]
     for pp in packs.values():
@@ -318,7 +337,11 @@ TEXT = {
            "project) holds, and how much of it is used.", "pack": "Project type", "items": "Holds", "sessions": "Sessions",
            "top": "Most used", "missing": "not in the hub: {x}", "no_packs": "No packs yet (packs/*.json).",
            "own_cases": "People's own cases", "ev": "passes {a} with it, {b} without, tokens {t:+d}% ({d})",
-           "shared_cases": "{n} shared case(s)", "suggestions": "suggestions"},
+           "shared_cases": "{n} shared case(s)", "suggestions": "suggestions",
+           "rel": "Released {d} by {by}: {note} ({proof})", "rel_ev": "own cases {a}, was {b}", "rel_noev": "not evaluated",
+           "rels": "Released", "rels_help": "New versions the owners published. Each was first run against the skill's cases beside the "
+           "version it replaced; everyone gets it the next time they start work.", "date": "Date", "by": "By", "what": "What changed",
+           "proof": "Cases", "forced": "released anyway: {x}"},
     "zh-TW": {"title": "技能中心", "intro": "最近 {days} 天（{since} 起）大家用了哪些技能、怎麼評價。由每個人電腦上的 opencolony-skills 外掛記錄，"
               "只分享次數、token 數和大家主動留下的回饋，不分享提示、回答或檔名。更新於 {made}。",
               "t_inv": "盤點到的技能", "t_used": "有人用的技能", "t_dead": "{days} 天沒人用", "t_people": "分享用量的人", "t_sessions": "工作階段",
@@ -333,7 +356,10 @@ TEXT = {
               "packs": "依專案類型", "packs_help": "每個 pack（某類專案會拉進去的技能、指令、subagent）包含什麼、實際用了多少。",
               "pack": "專案類型", "items": "內容", "sessions": "工作階段", "top": "最常用", "missing": "hub 裡找不到：{x}",
               "no_packs": "還沒有 pack（packs/*.json）。",
-              "own_cases": "使用者自己的考題", "ev": "用它通過 {a}、不用 {b}，token {t:+d}%（{d}）", "shared_cases": "分享了 {n} 題", "suggestions": "建議"},
+              "own_cases": "使用者自己的考題", "ev": "用它通過 {a}、不用 {b}，token {t:+d}%（{d}）", "shared_cases": "分享了 {n} 題", "suggestions": "建議",
+              "rel": "{d} 由 {by} 發布：{note}（{proof}）", "rel_ev": "考題 {a}，原本 {b}", "rel_noev": "未經考題驗證",
+              "rels": "已發布", "rels_help": "負責人發布的新版本。發布前都先和被取代的版本一起跑過該技能的考題；大家下次開始工作時就會拿到。",
+              "date": "日期", "by": "發布者", "what": "改了什麼", "proof": "考題", "forced": "仍然發布：{x}"},
 }
 
 
@@ -382,6 +408,17 @@ def dashboard(inv: dict, stats: dict, out: Path, lang: str = "en") -> Path:
             warn.append(T["like"].format(x=", ".join(k["similar"])))
         return st, k, warn, st.get("notes") or []
 
+    def proof_of(r):
+        ev = r.get("evidence") or {}
+        proof = T["rel_ev"].format(a=f"{ev['passed'][0]}/{ev['passed'][1]}", b=f"{ev['passed_before'][0]}/{ev['passed_before'][1]}") \
+            if ev.get("passed") and ev.get("passed_before") else T["rel_noev"]
+        return proof + (" · " + T["forced"].format(x=r["forced"]) if r.get("forced") else "")
+
+    def release_text(k):
+        r = k.get("release") if k else None
+        return T["rel"].format(d=r.get("date", ""), by=r.get("by", ""), note=r.get("note", ""), proof=proof_of(r)) if r else ""
+    rel_rows = [(r.get("date") or "", r.get("skill") or "", r.get("by") or "", r.get("note") or "", proof_of(r)) for r in (inv.get("releases") or [])[:10]]
+
     def issues_html(name, k):
         u = issues_url(name, k.get("feedback", "")) if k else ""
         return f"<div><a href=\"{esc(u)}\">{esc(T['suggestions'])}</a></div>" if u else ""
@@ -398,6 +435,7 @@ def dashboard(inv: dict, stats: dict, out: Path, lang: str = "en") -> Path:
             f"<li class={'good' if n['rating'] == 'up' else 'bad'}>{esc(n['date'])} {'👍' if n['rating'] == 'up' else '👎'} {esc(n['note'])}</li>"
             for n in notes))) if notes else ""
         body.append(f"<tr><td><b>{esc(r['name'])}</b><div class=mute>{esc(k.get('repo', ''))}</div>"
+                    f"{f'<div class=mute>{esc(release_text(k))}</div>' if release_text(k) else ''}"
                     f"{''.join(f'<div class=warn>{esc(w)}</div>' for w in warn)}</td><td>{esc(T[r['status']])}</td>"
                     f"<td class=n>{st.get('uses', 0)}</td><td class=n>{st.get('people', 0)}</td><td class=n>{st.get('days', 0)}</td>"
                     f"<td class='n good'>{st.get('up', 0)}</td><td class='n bad'>{st.get('down', 0)}</td>"
@@ -405,7 +443,8 @@ def dashboard(inv: dict, stats: dict, out: Path, lang: str = "en") -> Path:
                     f"<td>{esc(k.get('owner', ''))}{issues_html(r['name'], k)}</td>"
                     f"<td>{note_html}</td></tr>")
         mdnotes = "<br>".join(f"{md(n['date'])} {'👍' if n['rating'] == 'up' else '👎'} {md(n['note'])}" for n in notes[:5])
-        mdrows.append("| " + " | ".join([f"**{md(r['name'])}**" + "".join(f"<br>⚠ {md(w)}" for w in warn), md(T[r["status"]]),
+        mdrows.append("| " + " | ".join([f"**{md(r['name'])}**" + (f"<br>{md(release_text(k))}" if release_text(k) else "")
+                                          + "".join(f"<br>⚠ {md(w)}" for w in warn), md(T[r["status"]]),
                                           str(st.get("uses", 0)), str(st.get("people", 0)), str(st.get("days", 0)), str(st.get("up", 0)),
                                           str(st.get("down", 0)), str(st.get("corrections_after", 0)), tps, md(eval_text(r["name"])),
                                           md(k.get("owner", "")) + issues_md(r["name"], k), mdnotes]) + " |")
@@ -422,6 +461,10 @@ def dashboard(inv: dict, stats: dict, out: Path, lang: str = "en") -> Path:
     dead = [(r["name"], f"{r['known'][0].get('repo', '')}/{r['known'][0].get('path', '')}", r["known"][0].get("owner", ""),
              r["known"][0].get("last_changed", "")) for r in unused]
     dead_html = "".join(f"<tr><td><b>{esc(a)}</b></td><td>{esc(b)}</td><td>{esc(c)}</td><td>{esc(d)}</td></tr>" for a, b, c, d in dead)
+    rel_html = (f"<h2>{esc(T['rels'])}</h2><p class=mute>{esc(T['rels_help'])}</p><div class=wrap><table><tr>"
+                + "".join(f"<th>{esc(T[c])}</th>" for c in ("date", "skill", "by", "what", "proof")) + "</tr>"
+                + "".join("<tr>" + "".join(f"<td>{'<b>' + esc(x) + '</b>' if i == 1 else esc(x)}</td>" for i, x in enumerate(row)) + "</tr>" for row in rel_rows)
+                + "</table></div>") if rel_rows else ""
     page = f"""<!doctype html><html lang="{esc(lang)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{esc(T['title'])}</title><style>{CSS}</style></head><body><main>
 <h1>{esc(T['title'])}</h1><p class=mute>{esc(intro)}</p>
@@ -429,7 +472,7 @@ def dashboard(inv: dict, stats: dict, out: Path, lang: str = "en") -> Path:
 <h2>{esc(T['in_use'])}</h2><p class=mute>{esc(help_)}</p>
 <div class=wrap><table><tr>{''.join(f'<th{" class=n" if c not in ("skill", "status", "owner", "notes") else ""}>{esc(label(c))}</th>' for c in cols)}</tr>
 {''.join(body) or f'<tr><td colspan=12 class=mute>{esc(T["none_yet"])}</td></tr>'}</table></div>
-<h2>{esc(T['packs'])}</h2><p class=mute>{esc(T['packs_help'])}</p>
+{rel_html}<h2>{esc(T['packs'])}</h2><p class=mute>{esc(T['packs_help'])}</p>
 <div class=wrap><table><tr><th>{esc(T['pack'])}</th><th>{esc(T['items'])}</th><th class=n>{esc(T['sessions'])}</th><th class=n>{esc(T['people'])}</th><th>{esc(T['top'])}</th></tr>
 {''.join(f'<tr><td><b>{esc(a)}</b></td><td>{esc(b)}</td><td class=n>{c}</td><td class=n>{d}</td><td>{esc(e)}</td></tr>' for a, b, c, d, e in pack_rows) or f'<tr><td colspan=5 class=mute>{esc(T["no_packs"])}</td></tr>'}</table></div>
 <h2>{esc(T['dead'].format(days=days))}</h2><p class=mute>{esc(T['dead_help'])}</p>
@@ -445,6 +488,9 @@ def dashboard(inv: dict, stats: dict, out: Path, lang: str = "en") -> Path:
         lines += ["| " + " | ".join(md(label(c)) for c in cols) + " |", "|" + "---|" * len(cols), *mdrows]
     else:
         lines.append(md(T["none_yet"]))
+    if rel_rows:
+        lines += ["", f"## {md(T['rels'])}", "", md(T["rels_help"]), "", "| " + " | ".join(md(T[c]) for c in ("date", "skill", "by", "what", "proof")) + " |",
+                  "|---|---|---|---|---|", *("| " + " | ".join(f"**{md(x)}**" if i == 1 else md(x) for i, x in enumerate(row)) + " |" for row in rel_rows)]
     lines += ["", f"## {md(T['packs'])}", "", md(T["packs_help"]), ""]
     if pack_rows:
         lines += [f"| {md(T['pack'])} | {md(T['items'])} | {md(T['sessions'])} | {md(T['people'])} | {md(T['top'])} |", "|---|---|---|---|---|",

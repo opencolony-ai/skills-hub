@@ -3,13 +3,14 @@
 opencolony-skills plugin, or from a project's .claude/opencolony/ when a pack was pulled into the project
 (pull.py); when both are installed each thing is still counted once.
 
-  SessionStart       start the daily sync in the background, and tell the person about evaluations that
-                     finished since last time
+  SessionStart       bring the project's skills up to date from the hub and say what changed (update.py); start
+                     the daily sync in the background; tell the person about work that finished since last time
   UserPromptSubmit   the plugin's own commands are handled here and stopped before they reach Claude (no tokens,
                      no tool permission needed):
                        /skill-feedback up|down [skill] [note]
                        /save-as-case [what a good answer must have]   the last request becomes a case
-                       /skill-eval [skill] [--times N]                run the cases in the background
+                       /save-small-cases                              save the small cases the case-splitter skill showed
+                       /skill-eval [skill] [--times N]                run the cases in the background (small ones first)
                        /send-suggestion                               send what the skill-suggestion skill
                                                                       wrote, once a program has checked it
                      A typed /command or /skill that exists as a file is a use. If the person corrects Claude
@@ -42,6 +43,7 @@ OWN = "opencolony-skills:"          # this plugin's own commands are not skills 
 PREFIX = r"^\s*/(?:opencolony-skills:)?"
 FEEDBACK = re.compile(PREFIX + r"skill-feedback\b(.*)$", re.S)
 SAVE = re.compile(PREFIX + r"save-as-case\b(.*)$", re.S)
+SMALL = re.compile(PREFIX + r"save-small-cases\b(.*)$", re.S)
 EVAL = re.compile(PREFIX + r"skill-eval\b(.*)$", re.S)
 SEND = re.compile(PREFIX + r"send-suggestion\b(.*)$", re.S)
 OWN_SKILLS = common.OWN_SKILLS
@@ -58,6 +60,8 @@ SAY = {
                    "you start Claude Code, and on the hub's dashboard.",
            "nocases": "No cases for {x} yet: after using it, /save-as-case and what a good answer must have.",
            "noskill": "Which skill? /skill-eval <skill>",
+           "small": "Saved {n} small case(s) ({a} bytes of files, the original has {b}). /skill-eval now runs these.",
+           "nosmall": "No small cases to save. Ask Claude to split a case into small ones first.",
            "ready": "Suggestion for {x} is ready: an issue in {repo}{files}. Send it with /send-suggestion.",
            "files": ", with {n} file(s) going to your OneDrive",
            "look": " Check these words are made up, not real: {w}.",
@@ -73,6 +77,8 @@ SAY = {
               "eval": "在背景跑 {x} 的 {n} 題考題（用你的 Claude 額度）。結果會在下次開 Claude Code 時顯示，也會出現在 hub 儀表板。",
               "nocases": "{x} 還沒有考題：用過之後，/save-as-case 加上「好答案應該…」。",
               "noskill": "要評估哪個技能？/skill-eval <技能>",
+              "small": "已存 {n} 題小考題（檔案共 {a} bytes，原題 {b}）。之後 /skill-eval 會跑這些小題。",
+              "nosmall": "沒有可以存的小考題。先請 Claude 把一題考題拆成小題。",
               "ready": "給 {x} 的建議準備好了：會在 {repo} 開一個 issue{files}。要送出請輸入 /send-suggestion。",
               "files": "，{n} 個檔案存到你的 OneDrive",
               "look": "請確認這些字是假的、不是真實資料：{w}。",
@@ -149,7 +155,14 @@ def own_command(prompt: str, data: dict) -> str | None:
     sid, cwd = data.get("session_id", ""), data.get("cwd", "")
     m = FEEDBACK.match(prompt)
     if m:
-        return feedback.main(m.group(1).split())
+        return feedback.main(m.group(1).split(), cwd)
+    if SMALL.match(prompt):
+        import cases
+        r = cases.save_small(data.get("transcript_path", ""), cwd)
+        if not r["saved"] and not r["problems"]:
+            return say("nosmall", data)
+        msg = say("small", data, n=len(r["saved"]), a=f"{r['bytes']:,}", b=f"{r['parent_bytes']:,}") if r["saved"] else ""
+        return (msg + " " + " ".join(r["problems"])).strip()
     m = SAVE.match(prompt)
     if m:
         import cases
@@ -207,15 +220,22 @@ def main(event: str, data: dict) -> None:
         if not common.first_time(sid, event, data.get("source", "")):
             return
         common.forget_old_events()
+        said = []
+        try:                                   # bring the project's skills up to date before the session uses them
+            import update
+            said.append(update.run(data.get("cwd", "")).get("said", ""))
+        except BaseException:                  # noqa: BLE001 - an update that cannot be done is not this session's problem
+            pass
         background("sync.py", "--cwd", data.get("cwd", ""))
-        done = finished_evaluations()
-        if done:
-            common.write_stdout_json({"systemMessage": done})
+        said.append(finished_evaluations())
+        said = " ".join(x for x in said if x)
+        if said:
+            common.write_stdout_json({"systemMessage": said})
         return
     if event == "UserPromptSubmit":
         prompt = data.get("prompt", "")
         once = common.first_time(sid, event, hashlib.sha256(prompt.encode()).hexdigest(), window=2)
-        if FEEDBACK.match(prompt) or SAVE.match(prompt) or EVAL.match(prompt) or SEND.match(prompt):
+        if FEEDBACK.match(prompt) or SAVE.match(prompt) or SMALL.match(prompt) or EVAL.match(prompt) or SEND.match(prompt):
             if once:    # the other copy of this hook (if any) has blocked it already
                 (common.home() / "last_session").write_text(sid, encoding="utf-8")
                 common.write_stdout_json({"decision": "block", "reason": own_command(prompt, data)})

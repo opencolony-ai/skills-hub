@@ -50,16 +50,35 @@ def record(skill: str | None, rating: str, note: str, session: str = "", project
         common.save_state(session, st)
 
 
-def main(args: list[str]) -> str:
+def to_owner(skill: str | None, rating: str, note: str, cwd: str) -> str:
+    """Start sending a sentence of feedback to the skill's owner (in the background); says where it is going, or ""."""
+    if not note.strip() or not skill:
+        return ""
+    import subprocess
+    import suggest
+    if suggest.is_public(cwd):
+        return ""
+    host, owner, repo = suggest.destination(skill, cwd)
+    if not owner:
+        return ""
+    subprocess.Popen([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "suggest.py"), "quick", "--skill", skill,
+                      "--rating", rating, "--note", note, "--cwd", cwd, "--notify"], stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=os.environ.copy(), **common.detach_kwargs())
+    return f"{owner}/{repo}"
+
+
+def main(args: list[str], cwd: str = "") -> str:
     f = common.home() / "last_session"
     sid = f.read_text(encoding="utf-8").strip() if f.is_file() else ""
     used = common.state(sid).get("skills", []) if sid else []
     rating, skill, note = parse(args, used)
     if not rating:
         return "Usage: /skill-feedback up|down [skill] [a note]. Nothing recorded."
-    record(skill, rating, note, sid)
+    record(skill, rating, note, sid, project=common.project_id(cwd) if cwd else "")
     what = f"for {skill}" if skill else "(no skill was used in this session)"
-    return f"Recorded {'👍' if rating == 'up' else '👎'} {what}" + (f": “{note}”" if note else "") + "."
+    to = to_owner(skill, rating, note, cwd)
+    return (f"Recorded {'👍' if rating == 'up' else '👎'} {what}" + (f": “{note}”" if note else "") + "."
+            + (f" Sending it to the owner ({to})." if to else ""))
 
 
 def recent(project: str, days: int) -> list[dict]:

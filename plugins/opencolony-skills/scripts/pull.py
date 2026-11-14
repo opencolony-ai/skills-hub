@@ -123,7 +123,7 @@ def hub_url(hub: Path) -> str:
     return url or str(hub)
 
 
-def hub_setting(hub: Path, key: str, default: str = "") -> str:
+def hub_setting(hub: Path, key: str, default=""):
     try:
         return json.loads((hub / "hub.json").read_text(encoding="utf-8")).get(key) or default
     except (OSError, ValueError):
@@ -198,7 +198,7 @@ def apply(hub: Path, name: str, project: Path, force: bool = False) -> dict:
         report["removed"].append(f"{k[0]} {k[1]}")
     lock = {"schema": 1, "hub": hub_url(hub), "hub_commit": git(hub, "rev-parse", "HEAD"),
             "pack": name, "lang": hub_lang(hub), "feedback": hub_setting(hub, "feedback"),
-            "needs": pack.get("needs") or [], "wants": pack.get("wants") or [], "usage": hub_setting(hub, "usage", "git"), "pulled_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+            "needs": pack.get("needs") or [], "wants": pack.get("wants") or [], "usage": hub_setting(hub, "usage", "git"), "public": bool(hub_setting(hub, "public")), "pulled_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
             "items": sorted(entries, key=lambda e: (e["type"], e["name"]))}
     lock["tracking"] = install_tracking(hub, project)
     (project / ".claude" / "skills.lock.json").write_text(json.dumps(lock, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
@@ -248,7 +248,7 @@ def install_tracking(hub: Path, project: Path) -> str:
     strip_ours(settings)
     hooks = settings.setdefault("hooks", {})
     for event, matcher in HOOK_EVENTS.items():
-        ours = {"hooks": [{"type": "command", "command": hook_command(project, event), "timeout": 20}]}
+        ours = {"hooks": [{"type": "command", "command": hook_command(project, event), "timeout": 30 if event == "SessionStart" else 20}]}
         if matcher:
             ours = {"matcher": matcher, **ours}
         hooks[event] = hooks.get(event, []) + [ours]

@@ -29,7 +29,11 @@ import common
 import office
 
 TEXT_FILES = {".md", ".txt", ".csv", ".json", ".html", ".htm", ".xml", ".yaml", ".yml", ".py", ".js", ".ts", ".tsv"}
-OWN_COMMANDS = ("/save-as-case", "/skill-feedback", "/skill-eval", "/opencolony-skills:")
+OWN_COMMANDS = ("/save-as-case", "/save-small-cases", "/skill-feedback", "/skill-eval", "/send-suggestion", "/opencolony-skills:")
+
+# What the skills show in the conversation for a program to read (Claude writes no files under .claude/):
+#   ~~~~opencolony-suggestion / ~~~~opencolony-case NAME / ~~~~opencolony-file PATH / ~~~~opencolony-copy PATH
+BLOCKS = re.compile(r"^~~~~opencolony-(suggestion|file|case|copy)[ \t]*([^\n]*)\n(.*?)\n?~~~~[ \t]*$", re.S | re.M)
 
 
 # ------------------------------------------------------------------ saving a case from the session
@@ -108,6 +112,108 @@ def last_exchange_timed(transcript: str) -> tuple[str, str, str, list[str], floa
     return request, via, "\n\n".join(answer), tools, when
 
 
+def assistant_turns(transcript: str) -> list[str]:
+    """The text Claude wrote, one string per turn (everything between two of the person's messages)."""
+    turns, cur = [], []
+    try:
+        lines = open(transcript, encoding="utf-8").read().splitlines()
+    except (OSError, TypeError):
+        return []
+    for line in lines:
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        m = e.get("message")
+        if not isinstance(m, dict):
+            continue
+        if e.get("type") == "user" and not e.get("isMeta") and isinstance(m.get("content"), str):
+            if cur:
+                turns.append("\n".join(cur))
+            cur = []
+        elif e.get("type") == "assistant":
+            t = _text(m.get("content"))
+            if t:
+                cur.append(t)
+    if cur:
+        turns.append("\n".join(cur))
+    return turns
+
+
+def save_small(transcript: str, cwd: str) -> dict:
+    """Write the small cases Claude just showed (case-splitter skill) next to the case they were cut from.
+    {"saved": [ids], "problems": [...], "bytes": small total, "parent_bytes": the original's}. A small case that is
+    not smaller than its original, or that names no original, is refused."""
+    blocks = []
+    for text in reversed(assistant_turns(transcript)):
+        blocks = BLOCKS.findall(text)
+        if any(b[0] == "case" for b in blocks):
+            break
+    return save_small_blocks(blocks, cwd)
+
+
+def save_small_text(text: str, cwd: str) -> dict:
+    """The same, from an answer's text (the app's Split button runs the splitter without a terminal)."""
+    return save_small_blocks(BLOCKS.findall(text or ""), cwd)
+
+
+def save_small_blocks(blocks: list, cwd: str) -> dict:
+    out = {"saved": [], "problems": [], "bytes": 0, "parent_bytes": 0}
+    root = common.project_root(cwd)
+    for kind, arg, body in blocks:
+        if kind != "case":
+            continue
+        name = re.sub(r"[^A-Za-z0-9._-]+", "-", arg.strip()).strip("-")[:40]
+        try:
+            spec = json.loads(body)
+        except ValueError as e:
+            out["problems"].append(f"{arg.strip() or '?'}: not valid JSON ({e})")
+            continue
+        parent = (root / str(spec.get("parent", ""))).resolve()
+        if not name or not (parent / "case.json").is_file() or root not in parent.parents:
+            out["problems"].append(f"{name or '?'}: it does not name the case it was cut from (parent)")
+            continue
+        if not str(spec.get("request", "")).strip() or not isinstance(spec.get("checks"), list) or not spec["checks"]:
+            out["problems"].append(f"{name}: it needs a request and at least one check")
+            continue
+        orig = json.loads((parent / "case.json").read_text(encoding="utf-8"))
+        d = parent.parent / f"{parent.name}-{name}"
+        if d.exists():
+            shutil.rmtree(d)
+        (d / "files").mkdir(parents=True)
+        for k2, a2, b2 in blocks:                      # this case's files: written out, or copied whole from the original
+            rel = Path(a2.strip())
+            if k2 not in ("file", "copy") or not rel.parts or rel.parts[0] != arg.strip() or ".." in rel.parts or rel.is_absolute():
+                continue
+            dest = d / Path(*rel.parts[1:])
+            if d.resolve() not in dest.resolve().parents:
+                continue
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if k2 == "file":
+                dest.write_text(b2 + "\n", encoding="utf-8")
+            else:
+                src = parent / Path(*rel.parts[1:])
+                if src.is_file():
+                    shutil.copy2(src, dest)
+                else:
+                    out["problems"].append(f"{name}: {rel.as_posix()} is not in the original, so it was not copied")
+        small, big = size_of(d), size_of(parent)
+        if small > big * 0.6:                          # an original without files can only be narrowed in what it asks
+            shutil.rmtree(d)
+            out["problems"].append(f"{name}: not smaller than the original ({small:,} of {big:,} bytes): keep only what shows the problem")
+            continue
+        case = {"schema": 1, "skill": orig.get("skill", ""), "request": str(spec["request"]).strip(), "via": orig.get("via", "auto"),
+                "checks": spec["checks"], "made_by": common.user_handle(),
+                "made_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"), "from_version": orig.get("from_version", ""),
+                "answer_was": "", "small": True, "parent": f"{parent.parent.name}/{parent.name}",
+                **({"tools": orig["tools"]} if orig.get("tools") else {}), **({"why": str(spec["why"])[:300]} if spec.get("why") else {})}
+        (d / "case.json").write_text(json.dumps(case, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+        out["saved"].append(f"{d.parent.name}/{d.name}")
+        out["bytes"] += small
+        out["parent_bytes"] = max(out["parent_bytes"], big)
+    return out
+
+
 def cases_dir(cwd: str) -> Path:
     root = common.project_root(cwd)
     return root / ".claude" / "cases" if (root / ".claude").is_dir() else common.home() / "cases"
@@ -178,6 +284,21 @@ def load(d: Path) -> dict:
     c["dir"] = d
     c["id"] = f"{d.parent.name}/{d.name}"
     return c
+
+
+def select(found: list[dict], which: str = "auto") -> list[dict]:
+    """Which cases to run. "small": the ones cut from a bigger case (cheap, for iterating); "full": the originals;
+    "all"; "auto": the small ones when there are any, else everything."""
+    small = [c for c in found if c.get("small")]
+    if which == "small" or (which == "auto" and small):
+        return small
+    if which == "full":
+        return [c for c in found if not c.get("small")]
+    return found
+
+
+def size_of(d: Path) -> int:
+    return sum(f.stat().st_size for f in (d / "files").rglob("*") if f.is_file()) if (d / "files").is_dir() else 0
 
 
 def find(skill: str, cwd: str, extra: list[Path] = ()) -> list[dict]:

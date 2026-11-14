@@ -160,13 +160,26 @@ def run_one(c: dict, skill: str, project: Path, arm: str, proposed: Path | None 
             "outputs": where, "images": images, "decks": {k: {x: v[x] for x in ("slides", "charts", "slides_with_notes")} for k, v in reports.items()}}
 
 
+def standing_checks() -> list[dict]:
+    """Checks the hub asks of every case (hub.json "checks"), such as the owner's own bar for any output."""
+    try:
+        cs = json.loads((common.home() / "hub" / "hub.json").read_text(encoding="utf-8")).get("checks") or []
+    except (OSError, ValueError):
+        return []
+    return [c for c in cs if isinstance(c, dict) and len(c) == 1]
+
+
 def run(skill: str, project: Path, arms: list[str], proposed: Path | None = None, times: int = 1,
-        only: list[str] | None = None, progress=None) -> dict:
-    """progress(done, total, row) is called after each run (the app's progress bar)."""
+        only: list[str] | None = None, progress=None, which: str = "auto") -> dict:
+    """progress(done, total, row) is called after each run (the app's progress bar). `which`: "auto" runs the small
+    cases when there are any (cheap), "full" the originals, "all" both."""
     kind, short = kind_of(skill)
-    found = [c for c in cases.find(skill, str(project)) if not only or c["id"] in only]
+    found = [c for c in cases.select(cases.find(skill, str(project)), which) if not only or c["id"] in only]
     if not found:
         raise SystemExit(f"no cases for {skill}: save one with /save-as-case after using it")
+    extra = standing_checks()
+    for c in found:
+        c["checks"] = list(c.get("checks", [])) + [x for x in extra if x not in c.get("checks", [])]
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     keep = common.home() / "evals" / f"{stamp}-{short}"
     judge = make_judge({})
@@ -180,18 +193,20 @@ def run(skill: str, project: Path, arms: list[str], proposed: Path | None = None
         if progress:
             progress(n + 1, len(plan), rows[-1])
     result = summarise(skill, {a: sources[a][1] for a in arms}, len(found), times, rows)
+    result["which"] = "small" if all(c.get("small") for c in found) else "full" if not any(c.get("small") for c in found) else "all"
+    result["backend"] = backends.chosen()
     keep.mkdir(parents=True, exist_ok=True)
     (keep / "result.json").write_text(json.dumps({**result, "rows": rows}, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
     compare_page(keep, result, rows, found, common.lang(str(project)))
     return {**result, "kept": str(keep), "page": str(keep / "compare.html")}
 
 
-PAGE = {"en": {"title": "{skill}: with and without", "arm": {"none": "Without the skill", "current": "Current version", "proposed": "Proposed version"},
+PAGE = {"en": {"title": "{skill}: with and without", "title_versions": "{skill}: proposed version beside the current one", "arm": {"none": "Without the skill", "current": "Current version", "proposed": "Proposed version"},
                "pass": "passes every check", "fail": "fails", "unknown": "not decided", "tokens": "tokens", "seconds": "s",
                "used": "skill used", "unused": "skill not used", "slides": "slides", "charts": "native charts", "notes": "with notes",
                "request": "Request", "failed": "Failed checks", "none": "(no files)", "files": "Files", "run": "run",
                "no_pic": "No pictures: install LibreOffice and poppler (pdftoppm) to see the slides here."},
-        "zh-TW": {"title": "{skill}：有技能與沒技能", "arm": {"none": "沒有技能", "current": "現行版", "proposed": "提議版"},
+        "zh-TW": {"title": "{skill}：有技能與沒技能", "title_versions": "{skill}：提議版與現行版", "arm": {"none": "沒有技能", "current": "現行版", "proposed": "提議版"},
                   "pass": "全部檢查通過", "fail": "沒通過", "unknown": "無法判定", "tokens": "token", "seconds": "秒",
                   "used": "有用到技能", "unused": "沒用到技能", "slides": "張", "charts": "個原生圖表", "notes": "張有講者備註",
                   "request": "請求", "failed": "沒通過的檢查", "none": "（沒有檔案）", "files": "檔案", "run": "第",
@@ -203,6 +218,8 @@ def compare_page(keep: Path, result: dict, rows: list[dict], found: list[dict], 
     pdftoppm are installed), the checks they failed, tokens and seconds. Everything is escaped."""
     import html
     T = PAGE.get(lang, PAGE["en"])
+    if "none" not in (result.get("arms") or {}):
+        T = {**T, "title": T["title_versions"]}
     e = html.escape
     out = [f"<!doctype html><html lang='{e(lang)}'><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
            f"<title>{e(T['title'].format(skill=result['skill']))}</title><style>"
@@ -304,12 +321,13 @@ def main(argv=None) -> None:
     r = sub.add_parser("run"); r.add_argument("skill"); r.add_argument("--project", type=Path, default=Path.cwd())
     r.add_argument("--arms", default=None); r.add_argument("--proposed", type=Path); r.add_argument("--times", type=int, default=1)
     r.add_argument("--case", action="append"); r.add_argument("--notify", action="store_true")
+    r.add_argument("--which", default="auto", choices=["auto", "small", "full", "all"])
     for name in ("checks", "list"):
         p = sub.add_parser(name); p.add_argument("skill"); p.add_argument("--project", type=Path, default=Path.cwd())
     a = ap.parse_args(argv)
     if a.cmd == "run":
         arms = a.arms.split(",") if a.arms else (["none", "current", "proposed"] if a.proposed else ["none", "current"])
-        out = run(a.skill, a.project.resolve(), arms, a.proposed.resolve() if a.proposed else None, a.times, a.case)
+        out = run(a.skill, a.project.resolve(), arms, a.proposed.resolve() if a.proposed else None, a.times, a.case, which=a.which)
         out["said"] = say(out, common.lang(str(a.project))) + f" {out['page']}"
         if a.notify:            # shown when the person next starts Claude Code
             with (common.home() / "evals" / "unseen.jsonl").open("a", encoding="utf-8") as f:

@@ -215,35 +215,8 @@ def check(d: Path, cwd: str = "") -> dict:
     return result
 
 
-BLOCK = re.compile(r"^~~~~opencolony-(suggestion|file)[ \t]*([^\n]*)\n(.*?)\n~~~~[ \t]*$", re.S | re.M)
-
-
-def _assistant_turns(transcript: str) -> list[str]:
-    """The text Claude wrote, one string per turn (everything between two of the person's messages)."""
-    turns, cur = [], []
-    try:
-        lines = open(transcript, encoding="utf-8").read().splitlines()
-    except (OSError, TypeError):
-        return []
-    for line in lines:
-        try:
-            e = json.loads(line)
-        except ValueError:
-            continue
-        m = e.get("message")
-        if not isinstance(m, dict):
-            continue
-        if e.get("type") == "user" and not e.get("isMeta") and isinstance(m.get("content"), str):
-            if cur:
-                turns.append("\n".join(cur))
-            cur = []
-        elif e.get("type") == "assistant":
-            t = cases._text(m.get("content"))
-            if t:
-                cur.append(t)
-    if cur:
-        turns.append("\n".join(cur))
-    return turns
+BLOCK = cases.BLOCKS
+_assistant_turns = cases.assistant_turns
 
 
 def draft(transcript: str, last_turn_only: bool = False) -> tuple[str, list[tuple[str, str]]] | None:
@@ -402,6 +375,43 @@ def send(d: Path, cwd: str = "", run: bool = True) -> dict:
     return out
 
 
+def is_public(cwd: str) -> bool:
+    """A public hub: what is sent there can be read by anyone, so nothing goes without the person seeing it first."""
+    lock = common.project_lock(cwd)
+    if "public" in lock:
+        return bool(lock["public"])
+    try:
+        return bool(json.loads((common.home() / "hub" / "hub.json").read_text(encoding="utf-8")).get("public"))
+    except (OSError, ValueError):
+        return False
+
+
+def quick(skill: str, rating: str, note: str, cwd: str = "", client: str = "claude-code") -> dict:
+    """One sentence of feedback, sent to the skill's owner as an issue exactly as the person wrote it. Not on a
+    public hub (there a suggestion is drafted and shown first), and not without a note."""
+    note = " ".join((note or "").split())
+    if not note or not skill:
+        return {"sent": False, "why": "nothing to send"}
+    if is_public(cwd):
+        return {"sent": False, "why": "public hub"}
+    host, owner, repo = destination(skill, cwd)
+    if not owner:
+        return {"sent": False, "why": "no feedback repository is known"}
+    short = skill.lstrip("/@").split(":")[-1]
+    kind = "command" if skill.startswith("/") else "agent" if skill.startswith("@") else "skill"
+    version = common.find_item(kind, skill.lstrip("/@"), cwd)[0]
+    lock = common.project_lock(cwd)
+    body = "\n".join([("👍 " if rating == "up" else "👎 ") + note, "", "---",
+                      f"**Skill**: `{skill}`" + (f" (version `{version}`)" if version else "") + (f", pack `{lock['pack']}`" if lock.get("pack") else ""),
+                      f"**From**: {common.user_handle()}, {dt.date.today().isoformat()}, {client}", "",
+                      "<!-- opencolony " + json.dumps({"schema": 1, "skill": skill, "version": version, "kind": "feedback", "rating": rating}) + " -->"])
+    url, why = open_issue(host, owner, repo, f"[{short}] {note}"[:120], body, [f"skill:{short}", "feedback", "helped" if rating == "up" else "did-not-help"])
+    if why:
+        return {"sent": False, "why": why, "to": f"{owner}/{repo}"}
+    common.append({"kind": "suggestion", "skill": skill, "sent": True, "with_files": False, "quick": True})
+    return {"sent": True, "issue": url, "to": f"{owner}/{repo}"}
+
+
 def notice(text: str) -> None:
     common.home().mkdir(parents=True, exist_ok=True)
     with (common.home() / "notices.jsonl").open("a", encoding="utf-8") as f:
@@ -415,7 +425,20 @@ def main(argv=None) -> None:
     c = sub.add_parser("check"); c.add_argument("dir", type=Path)
     s = sub.add_parser("send"); s.add_argument("dir", type=Path); s.add_argument("--no-run", action="store_true")
     s.add_argument("--notify", action="store_true")
+    q = sub.add_parser("quick"); q.add_argument("--skill", required=True); q.add_argument("--rating", default="down")
+    q.add_argument("--note", required=True); q.add_argument("--cwd", default=""); q.add_argument("--notify", action="store_true")
     a = ap.parse_args(argv)
+    if a.cmd == "quick":
+        out = quick(a.skill, a.rating, a.note, a.cwd)
+        if a.notify:
+            zh = common.lang(a.cwd) == "zh-TW"
+            if out.get("sent"):
+                notice((f"回饋已送給負責人：{out['issue']}" if zh else f"Feedback sent to the owner: {out['issue']}"))
+            elif out.get("why") not in ("public hub", "nothing to send"):
+                notice((f"回饋已記錄，但沒能直接送給負責人（{out['why']}）；它會跟著每週用量一起送出。" if zh else
+                        f"Feedback recorded, but it could not go straight to the owner ({out['why']}); it goes with the weekly usage instead."))
+        common.write_stdout_json(out)
+        return
     if a.cmd == "list":
         out = [{"id": d.name, **{k: v for k, v in load(d).items() if k in ("skill", "kind", "title")}} for d in pending(a.project)]
     elif a.cmd == "check":

@@ -95,11 +95,11 @@ def hub_url(cwd: str = "") -> str:
     return common.config().get("hub") or common.project_lock(cwd).get("hub") or detect_hub()
 
 
-def publish(place, message: str, cwd: str = "", rebuild_now: bool = False) -> bool:
+def publish(place, message: str, cwd: str = "", rebuild_now: bool = False, even_if_public: bool = False) -> bool:
     """Put files into the hub and push: place(clone) writes them and returns the paths to add. Starts again
     from the hub's latest commit when someone else pushed in between, and rebuilds the dashboard each time."""
     hub = hub_url(cwd)
-    if not hub or usage_mode() == "none":
+    if not hub or (usage_mode() == "none" and not even_if_public):      # a release is not usage: its owner may push it
         return False
     clone = common.home() / "hub"
     if not (clone / ".git").is_dir():
@@ -219,6 +219,11 @@ if __name__ == "__main__":
         run(dry=True, cwd=cwd, now=later)
     elif not locked():
         try:
+            try:                        # Cowork has no hooks: its skills are refreshed and its reports collected here
+                import cowork
+                cowork.sync()
+            except BaseException:       # noqa: BLE001
+                pass
             done = run(cwd=cwd, now=later, rebuild_now=later is not None)       # trying it out: show the dashboard now
             if "--include-today" in a:
                 print(json.dumps({"shared": done}, ensure_ascii=False))

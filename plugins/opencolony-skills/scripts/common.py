@@ -10,7 +10,8 @@ import re
 from pathlib import Path
 
 SCHEMA = 1
-OWN_SKILLS = {"skill-suggestion"}     # the plugin's own skill: not one of the company's skills to count
+TOOLS_VERSION = "0.2.0"       # of the hooks, skills and commands a hub carries (plugins/opencolony-skills); the app says when a hub's are older
+OWN_SKILLS = {"skill-suggestion", "case-splitter"}     # the plugin's own skill: not one of the company's skills to count
 
 
 def home() -> Path:
@@ -133,7 +134,8 @@ def project_id(cwd: str) -> str:
 
 
 def lang(cwd: str = "") -> str:
-    return project_lock(cwd).get("lang") or config().get("lang") or "en"
+    """The person's own choice (the app's Settings), else the hub's language, else English."""
+    return config().get("lang") or project_lock(cwd).get("lang") or "en"
 
 
 def user_handle() -> str:
@@ -381,12 +383,15 @@ def summarise(events: list[dict], user: str, date: str, week: str = "", days: li
         kind = "command" if name.startswith("/") else "agent" if name.startswith("@") else "skill"
         return skills.setdefault(name, {"type": kind, "uses": 0, "sessions": 0, "versions": {}, "sources": [],
                                         "packs": {}, "tokens_in_sessions": 0, "feedback_up": 0, "feedback_down": 0,
-                                        "notes": [], "corrections_after": 0, "days_used": [], "last_used": ""})
+                                        "notes": [], "corrections_after": 0, "days_used": [], "last_used": "",
+                                        "token_sessions": 0, "clients": {}})
     for e in events:
         kind, sid = e.get("kind"), e.get("session", "")
         if kind == "use":
             s = sk(e["skill"])
             s["uses"] += 1
+            client = e.get("client") or "claude-code"
+            s["clients"][client] = s["clients"].get(client, 0) + 1
             day = str(e.get("at", ""))[:10]
             if day and day not in s["days_used"]:
                 s["days_used"].append(day)
@@ -418,7 +423,9 @@ def summarise(events: list[dict], user: str, date: str, week: str = "", days: li
         for name in v["skills"]:
             s = sk(name)
             s["sessions"] += 1
-            s["tokens_in_sessions"] += v["tokens"]
+            if v["tokens"]:                     # a use reported by Cowork has no token count: it is left out of the average
+                s["token_sessions"] += 1
+                s["tokens_in_sessions"] += v["tokens"]
     period = {"week": week, "days": days or [date]} if week else {}
     return {"schema": SCHEMA, "client": "claude-code", "user": user, "date": date, **period,
             "sessions": sum(1 for v in sessions.values() if v.get("ended")),
