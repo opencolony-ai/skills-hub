@@ -1,0 +1,6 @@
+{
+  "name": "anthropic-skills",
+  "version": "0.1.0",
+  "description": "Document skills from Anthropic",
+  "license": "Apache-2.0"
+}

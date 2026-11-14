@@ -1,0 +1,9 @@
+{
+  "hooks": {
+    "SessionStart": [{"hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/record.py\" SessionStart", "timeout": 10}]}],
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/record.py\" UserPromptSubmit", "timeout": 10}]}],
+    "PostToolUse": [{"matcher": "Skill|Agent|Task", "hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/record.py\" PostToolUse", "timeout": 10}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/record.py\" Stop", "timeout": 10}]}],
+    "SessionEnd": [{"hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/record.py\" SessionEnd", "timeout": 20}]}]
+  }
+}

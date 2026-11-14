@@ -1,0 +1,7 @@
+{
+  "title": "Everything in this hub",
+  "description": "Every skill the hub holds.",
+  "skills": ["pptx", "docx", "xlsx", "pdf", "internal-comms"],
+  "needs": ["node", "npm"],
+  "wants": ["soffice", "pdftoppm"]
+}

@@ -1,0 +1,7 @@
+{
+  "title": "Client proposal",
+  "description": "A deck, a written proposal and the company's usual tone.",
+  "skills": ["pptx", "docx", "internal-comms"],
+  "needs": ["node", "npm"],
+  "wants": ["soffice", "pdftoppm"]
+}

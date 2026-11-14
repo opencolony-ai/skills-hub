@@ -1,0 +1,46 @@
+name: skills hub
+
+# Optional. The opencolony-skills plugin already rebuilds data/ and DASHBOARD.md each time someone shares usage,
+# so the hub works without GitHub Actions. Where Actions is available, this also rebuilds them every night and
+# when a skill or hub.json changes. The commit it makes does not start it again (pushes by GITHUB_TOKEN never do).
+on:
+  schedule:
+    - cron: "17 1 * * *"
+  push:
+    branches: [main]
+    paths: ["plugins/**", "hub.json", "hub/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: skills-hub
+  cancel-in-progress: false
+
+jobs:
+  dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Count and save
+        env:
+          # read access to the repositories listed in hub.json "repos"; leave unset to scan only this one
+          HUB_READ_TOKEN: ${{ secrets.HUB_READ_TOKEN }}
+        run: |
+          git config user.name "skills-hub"
+          git config user.email "skills-hub@users.noreply.github.com"
+          for i in 1 2 3; do
+            git fetch -q origin main && git reset -q --hard origin/main
+            python hub/hub.py all
+            git add data DASHBOARD.md
+            git diff --cached --quiet && exit 0
+            git commit -q -m "dashboard: $(date -u +%F)"
+            git push -q origin HEAD:main && exit 0
+          done
+          exit 1

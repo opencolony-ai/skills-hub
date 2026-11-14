@@ -1,0 +1,7 @@
+{
+  "title": "Documents",
+  "description": "Word and PDF files, and internal announcements.",
+  "skills": ["docx", "pdf", "internal-comms"],
+  "needs": ["node", "npm"],
+  "wants": ["soffice", "pdftoppm"]
+}

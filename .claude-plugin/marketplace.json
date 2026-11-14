@@ -1,0 +1,26 @@
+{
+  "name": "skills-hub",
+  "owner": {
+    "name": "Skills hub"
+  },
+  "metadata": {
+    "description": "The company's shared skills, and the plugin that tells their owners which are used and what people say about them."
+  },
+  "plugins": [
+    {
+      "name": "opencolony-skills",
+      "source": "./plugins/opencolony-skills",
+      "description": "Counts which skills Claude Code uses and records /skill-feedback; shares a daily summary with this repository."
+    },
+    {
+      "name": "team-skills",
+      "source": "./plugins/team-skills",
+      "description": "The skills kept in this repository."
+    },
+    {
+      "name": "anthropic-skills",
+      "source": "./plugins/anthropic-skills",
+      "description": "Document skills from Anthropic"
+    }
+  ]
+}

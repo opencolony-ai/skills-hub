@@ -1,0 +1,7 @@
+{
+  "name": "opencolony-skills",
+  "version": "0.1.0",
+  "description": "Records which skills Claude Code uses, how many tokens those sessions take, and what people say about them, and shares a daily summary with the company's skills hub repository.",
+  "author": { "name": "OpenColony" },
+  "license": "MIT"
+}
