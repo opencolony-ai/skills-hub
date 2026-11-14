@@ -1,0 +1,14 @@
+{
+ "schema": 1,
+ "made": "2026-11-14T15:35:04+00:00",
+ "days": 30,
+ "since": "2026-10-15",
+ "packs": [],
+ "evals": {},
+ "cases": {},
+ "people": 0,
+ "sessions": 0,
+ "sessions_with_skills": 0,
+ "tokens_per_session_without_skills": null,
+ "skills": []
+}
