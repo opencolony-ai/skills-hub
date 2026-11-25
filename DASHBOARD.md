@@ -1,6 +1,6 @@
 # Skills hub
 
-Which skills people use, and what they say about them, over the last 30 days (since 2026-10-25). Counted by the opencolony-skills plugin on each person's machine: only counts, tokens and the notes people typed as feedback are shared, never prompts, answers or file names. Updated 2026-11-24T10:54:23+00:00.
+Which skills people use, and what they say about them, over the last 30 days (since 2026-10-26). Counted by the opencolony-skills plugin on each person's machine: only counts, tokens and the notes people typed as feedback are shared, never prompts, answers or file names. Updated 2026-11-25T09:50:40+00:00.
 
 **5** skills in the inventory · **0** skills used · **5** not used in 30 days · **0** people sharing usage · **0** sessions
 
